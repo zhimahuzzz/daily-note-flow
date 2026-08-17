@@ -1,0 +1,82 @@
+.daily-note-flow-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+}
+
+.daily-note-flow-section {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--background-primary);
+}
+
+.daily-note-flow-section h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.daily-note-flow-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.daily-note-flow-row input[type="text"],
+.daily-note-flow-row input[type="time"] {
+  min-width: 0;
+}
+
+.daily-note-flow-grow {
+  flex: 1;
+}
+
+.daily-note-flow-textarea {
+  min-height: 82px;
+  width: 100%;
+  resize: vertical;
+}
+
+.daily-note-flow-view textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.daily-note-flow-records {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.daily-note-flow-record {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+}
+
+.daily-note-flow-record-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.daily-note-flow-record-row input[type="text"] {
+  min-width: 0;
+}
+
+.daily-note-flow-muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.daily-note-flow-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.daily-note-flow-actions button {
+  min-width: 0;
+}
