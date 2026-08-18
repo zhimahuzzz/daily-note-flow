@@ -1,7 +1,6 @@
 import {
   App,
   ItemView,
-  MarkdownView,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -34,11 +33,6 @@ interface ParsedDailyNote {
   todos: string[];
   records: Record<TimePeriod, DailyRecord[]>;
   summary: string;
-}
-
-interface SummaryFile {
-  title: string;
-  body: string;
 }
 
 interface DailyNoteEntry {
@@ -123,7 +117,7 @@ function formatTaskLine(line: string) {
   return line.startsWith("- ") ? line : `- ${line}`;
 }
 
-function formatRecordLines(records: DailyRecord[]) {
+function formatRecordLines(records: DailyRecord[]): string[] {
   return records.map((record) => `- ${record.time} ${record.content}`.trimEnd());
 }
 
@@ -154,7 +148,7 @@ function getMonthlyFolder(rootFolder: string) {
   return `${ensureFolderPath(rootFolder)}/Monthly`;
 }
 
-function createEmptyNote(date: Date): ParsedDailyNote {
+function createEmptyNote(): ParsedDailyNote {
   return {
     tasks: [],
     todos: [],
@@ -196,7 +190,7 @@ function renderDailyNote(date: Date, parsed: ParsedDailyNote) {
 }
 
 function parseDailyNote(content: string): ParsedDailyNote {
-  const note = createEmptyNote(new Date());
+  const note = createEmptyNote();
   const lines = content.split(/\r?\n/);
   let section = "";
   let recordPeriod: TimePeriod | null = null;
@@ -238,7 +232,7 @@ function parseDailyNote(content: string): ParsedDailyNote {
       continue;
     }
     if (section === "records" && recordPeriod && line.startsWith("- ")) {
-      const match = line.match(/^\-\s+(\d{2}:\d{2})\s*(.*)$/);
+      const match = line.match(/^-\s+(\d{2}:\d{2})\s*(.*)$/);
       if (match) {
         note.records[recordPeriod].push({
           time: match[1],
@@ -260,13 +254,6 @@ async function ensureFolder(app: App, folderPath: string) {
   if (!folder) {
     await app.vault.createFolder(folderPath);
   }
-}
-
-function buildSummaryFile(noteType: "weekly" | "monthly", title: string, body: string): SummaryFile {
-  return {
-    title,
-    body: `# ${title}\n\n${body.trim()}\n`
-  };
 }
 
 async function listDailyEntries(app: App, rootFolder: string, start: Date, end: Date): Promise<DailyNoteEntry[]> {
@@ -358,6 +345,24 @@ function previewSummaryContent(title: string, body: string) {
   return `# ${title}\n\n${body.trim()}\n`;
 }
 
+function extractAiContent(responseText: string): string {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(responseText) as unknown;
+  } catch {
+    return "";
+  }
+  if (!payload || typeof payload !== "object") return "";
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return "";
+  const firstChoice = choices[0];
+  if (!firstChoice || typeof firstChoice !== "object") return "";
+  const message = (firstChoice as { message?: unknown }).message;
+  if (!message || typeof message !== "object") return "";
+  const content = (message as { content?: unknown }).content;
+  return typeof content === "string" ? content.trim() : "";
+}
+
 export default class DailyNoteFlowPlugin extends Plugin {
   settings: DailyNoteFlowSettings;
   summaryPreviewState: SummaryPreviewState | null = null;
@@ -370,8 +375,8 @@ export default class DailyNoteFlowPlugin extends Plugin {
       void this.openPanel();
     });
     this.addCommand({
-      id: "open-daily-note-flow",
-      name: "Open Daily Note Flow",
+      id: "open",
+      name: "Open daily note",
       callback: () => void this.openPanel()
     });
     this.addSettingTab(new DailyNoteFlowSettingTab(this.app, this));
@@ -386,17 +391,16 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 
   async openPanel() {
-    const leaf = this.app.workspace.getLeftLeaf(false) ?? this.app.workspace.getRightLeaf(false);
-    if (!leaf) return;
+    const leaf = this.app.workspace.getLeaf(false);
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   async openPreview(title: string, file: TFile, body: string) {
     this.summaryPreviewState = { title, file, body };
-    const leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf(true);
+    const leaf = this.app.workspace.getLeaf("split", "vertical");
     await leaf.setViewState({ type: PREVIEW_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   async getDailyFile(date = new Date()): Promise<TFile> {
@@ -405,7 +409,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
     let file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       await ensureFolder(this.app, folder);
-      file = await this.app.vault.create(path, renderDailyNote(date, createEmptyNote(date)));
+      file = await this.app.vault.create(path, renderDailyNote(date, createEmptyNote()));
     }
     if (!(file instanceof TFile)) {
       throw new Error(`Unable to create daily note at ${path}`);
@@ -520,10 +524,9 @@ export default class DailyNoteFlowPlugin extends Plugin {
         })
       });
       if (response.status >= 400) {
-        throw new Error(`HTTP ${response.status}: ${response.text || JSON.stringify(response.json)}`);
+        throw new Error(`HTTP ${response.status}: ${response.text}`);
       }
-      const json = response.json ?? JSON.parse(response.text);
-      const content = json?.choices?.[0]?.message?.content?.trim?.() ?? "";
+      const content = extractAiContent(response.text);
       if (!content) {
         throw new Error("DeepSeek returned an empty summary.");
       }
@@ -615,10 +618,9 @@ export default class DailyNoteFlowPlugin extends Plugin {
         })
       });
       if (response.status >= 400) {
-        throw new Error(`HTTP ${response.status}: ${response.text || JSON.stringify(response.json)}`);
+        throw new Error(`HTTP ${response.status}: ${response.text}`);
       }
-      const json = response.json ?? JSON.parse(response.text);
-      const content = json?.choices?.[0]?.message?.content?.trim?.() ?? "";
+      const content = extractAiContent(response.text);
       if (!content) {
         throw new Error("DeepSeek returned an empty summary.");
       }
@@ -803,7 +805,7 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Daily Note Flow" });
+    new Setting(containerEl).setName("Daily Note Flow").setHeading();
 
     new Setting(containerEl)
       .setName("Root folder")
