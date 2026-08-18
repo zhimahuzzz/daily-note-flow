@@ -16,6 +16,8 @@ Required root files:
 - `src/main.ts`
 - `styles.css`
 
+Do not commit the compiled `main.js` bundle or release assets into the source repository root.
+
 ## Release files
 
 Each GitHub release must attach:

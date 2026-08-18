@@ -51,15 +51,11 @@ Daliy_Note/Monthly/2026-08.md
 - API keys are stored locally in Obsidian plugin data and should not be committed to GitHub.
 - Daily, weekly, and monthly notes are kept in separate folders so they remain easy to browse and sync.
 
-## Installation for your vault
+## Installation
 
-Copy these release files into:
+Install it from the Obsidian community plugin browser after the release is approved, or copy the release files from the GitHub release into your vault plugin folder.
 
-```text
-E:\AI_agent\obsidian\Personal_Knowledge_Base\.obsidian\plugins\daily-note-flow
-```
-
-Files:
+Release files:
 
 - `manifest.json`
 - `main.js`

@@ -1,3 +1,5 @@
 node_modules/
 *.map
 data.json
+main.js
+release/
