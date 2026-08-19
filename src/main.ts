@@ -108,7 +108,11 @@ function isDateInRange(date: Date, start: Date, end: Date) {
 }
 
 function parseDateKey(key: string) {
-  const [year, month, day] = key.split("-").map(Number);
+  const parts = key.split("-");
+  if (parts.length !== 3) return null;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
 }
@@ -118,7 +122,10 @@ function formatTaskLine(line: string) {
 }
 
 function formatRecordLines(records: DailyRecord[]): string[] {
-  return records.map((record) => `- ${record.time} ${record.content}`.trimEnd());
+  return records.map((record): string => {
+    const content = record.content.trim();
+    return content ? `- ${record.time} ${content}` : `- ${record.time}`;
+  });
 }
 
 function timePeriodFromTime(time: string): TimePeriod {
@@ -383,7 +390,8 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const stored = await this.loadData() as Partial<DailyNoteFlowSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
   }
 
   async saveSettings() {
@@ -393,14 +401,12 @@ export default class DailyNoteFlowPlugin extends Plugin {
   async openPanel() {
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
-    await this.app.workspace.revealLeaf(leaf);
   }
 
   async openPreview(title: string, file: TFile, body: string) {
     this.summaryPreviewState = { title, file, body };
     const leaf = this.app.workspace.getLeaf("split", "vertical");
     await leaf.setViewState({ type: PREVIEW_VIEW_TYPE, active: true });
-    await this.app.workspace.revealLeaf(leaf);
   }
 
   async getDailyFile(date = new Date()): Promise<TFile> {
@@ -805,7 +811,7 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName("Daily Note Flow").setHeading();
+    new Setting(containerEl).setName("General").setHeading();
 
     new Setting(containerEl)
       .setName("Root folder")
