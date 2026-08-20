@@ -29,7 +29,7 @@ Each GitHub release must attach:
 The release tag should match `manifest.json`:
 
 ```text
-0.1.2
+0.1.3
 ```
 
 ## Current settings to declare
@@ -51,7 +51,7 @@ DeepSeek AI polishing is optional. When AI polishing is used, the relevant Markd
 
 - [ ] Create a public GitHub repository named `daily-note-flow`
 - [ ] Push this plugin folder as the repository root
-- [ ] Create release `0.1.2`
+- [ ] Create release `0.1.3`
 - [ ] Attach `main.js`, `manifest.json`, and `styles.css`
 - [ ] Submit the plugin through the Obsidian community plugin submission flow
 - [ ] Respond to review feedback

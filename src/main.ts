@@ -47,6 +47,8 @@ interface SummaryPreviewState {
   body: string;
 }
 
+type JsonObject = Record<string, unknown>;
+
 const DEFAULT_SETTINGS: DailyNoteFlowSettings = {
   rootFolder: "Daliy_Note",
   deepseekApiKey: "",
@@ -137,6 +139,19 @@ function timePeriodFromTime(time: string): TimePeriod {
 
 function isHeading(line: string, level: number, title: string) {
   return line.startsWith(`${"#".repeat(level)} ${title}`);
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null;
+}
+
+function parseRecordLine(line: string): DailyRecord | null {
+  const match = /^-\s+(?<time>\d{2}:\d{2})\s*(?<content>.*)$/.exec(line);
+  if (!match?.groups) return null;
+  return {
+    time: match.groups.time,
+    content: match.groups.content.trim()
+  };
 }
 
 function ensureFolderPath(folderPath: string) {
@@ -239,13 +254,8 @@ function parseDailyNote(content: string): ParsedDailyNote {
       continue;
     }
     if (section === "records" && recordPeriod && line.startsWith("- ")) {
-      const match = line.match(/^-\s+(\d{2}:\d{2})\s*(.*)$/);
-      if (match) {
-        note.records[recordPeriod].push({
-          time: match[1],
-          content: match[2].trim()
-        });
-      }
+      const record = parseRecordLine(line);
+      if (record) note.records[recordPeriod].push(record);
       continue;
     }
     if (section === "summary") {
@@ -359,14 +369,14 @@ function extractAiContent(responseText: string): string {
   } catch {
     return "";
   }
-  if (!payload || typeof payload !== "object") return "";
-  const choices = (payload as { choices?: unknown }).choices;
+  if (!isJsonObject(payload)) return "";
+  const choices = payload.choices;
   if (!Array.isArray(choices) || choices.length === 0) return "";
   const firstChoice = choices[0];
-  if (!firstChoice || typeof firstChoice !== "object") return "";
-  const message = (firstChoice as { message?: unknown }).message;
-  if (!message || typeof message !== "object") return "";
-  const content = (message as { content?: unknown }).content;
+  if (!isJsonObject(firstChoice)) return "";
+  const message = firstChoice.message;
+  if (!isJsonObject(message)) return "";
+  const content = message.content;
   return typeof content === "string" ? content.trim() : "";
 }
 
@@ -405,7 +415,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
 
   async openPreview(title: string, file: TFile, body: string) {
     this.summaryPreviewState = { title, file, body };
-    const leaf = this.app.workspace.getLeaf("split", "vertical");
+    const leaf = this.app.workspace.getLeaf(true);
     await leaf.setViewState({ type: PREVIEW_VIEW_TYPE, active: true });
   }
 
@@ -811,8 +821,6 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName("General").setHeading();
-
     new Setting(containerEl)
       .setName("Root folder")
       .setDesc("Folder inside your Obsidian vault.")
