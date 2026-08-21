@@ -145,6 +145,18 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null;
 }
 
+function isUnknownArray(value: unknown): value is Array<unknown> {
+  return Array.isArray(value);
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 function parseRecordLine(line: string): DailyRecord | null {
   const match = /^-\s+(?<time>\d{2}:\d{2})\s*(?<content>.*)$/.exec(line);
   if (!match?.groups) return null;
@@ -213,7 +225,7 @@ function renderDailyNote(date: Date, parsed: ParsedDailyNote) {
 
 function parseDailyNote(content: string): ParsedDailyNote {
   const note = createEmptyNote();
-  const lines = content.split(/\r?\n/);
+  const lines: string[] = content.split(/\r?\n/);
   let section = "";
   let recordPeriod: TimePeriod | null = null;
 
@@ -363,16 +375,11 @@ function previewSummaryContent(title: string, body: string) {
 }
 
 function extractAiContent(responseText: string): string {
-  let payload: unknown;
-  try {
-    payload = JSON.parse(responseText) as unknown;
-  } catch {
-    return "";
-  }
+  const payload = safeJsonParse(responseText);
   if (!isJsonObject(payload)) return "";
   const choices = payload.choices;
-  if (!Array.isArray(choices) || choices.length === 0) return "";
-  const firstChoice = choices[0];
+  if (!isUnknownArray(choices) || choices.length === 0) return "";
+  const firstChoice: unknown = choices[0];
   if (!isJsonObject(firstChoice)) return "";
   const message = firstChoice.message;
   if (!isJsonObject(message)) return "";
@@ -816,6 +823,10 @@ class DailyNoteFlowPreviewView extends ItemView {
 class DailyNoteFlowSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: DailyNoteFlowPlugin) {
     super(app, plugin);
+  }
+
+  getSettingDefinitions() {
+    return [];
   }
 
   display(): void {
