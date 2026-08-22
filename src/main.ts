@@ -229,8 +229,8 @@ function parseDailyNote(content: string): ParsedDailyNote {
   let section = "";
   let recordPeriod: TimePeriod | null = null;
 
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd();
+  for (const rawLine of lines as string[]) {
+    const line: string = rawLine.trimEnd();
     if (isHeading(line, 2, "Daily Tasks")) {
       section = "tasks";
       recordPeriod = null;
@@ -733,7 +733,7 @@ class DailyNoteFlowView extends ItemView {
         };
       });
       if (note.records[period].length === 0) {
-        group.createEl("div", { cls: "daily-note-flow-muted", text: "No records yet." });
+        group.createDiv({ cls: "daily-note-flow-muted", text: "No records yet." });
       }
     }
 
