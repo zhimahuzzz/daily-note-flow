@@ -80,3 +80,40 @@
 .daily-note-flow-actions button {
   min-width: 0;
 }
+
+.daily-note-flow-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.daily-note-flow-task-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.daily-note-flow-task-row input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.daily-note-flow-task-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.daily-note-flow-task-delete {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.daily-note-flow-task-delete:hover {
+  color: var(--text-error);
+}

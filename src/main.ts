@@ -28,6 +28,11 @@ interface DailyRecord {
   content: string;
 }
 
+interface TaskItem {
+  checked: boolean;
+  content: string;
+}
+
 interface ParsedDailyNote {
   tasks: string[];
   todos: string[];
@@ -121,6 +126,83 @@ function parseDateKey(key: string) {
 
 function formatTaskLine(line: string) {
   return line.startsWith("- ") ? line : `- ${line}`;
+}
+
+function parseTaskLine(line: string): TaskItem {
+  const match = /^-\s+(?:\[([ xX])\]\s*)?(.*)$/.exec(line);
+  if (!match) return { checked: false, content: line.trim() };
+  const checked = match[1] ? /[xX]/.test(match[1]) : false;
+  const content = (match[2] || "").trim();
+  return { checked, content };
+}
+
+function renderTaskLine(task: TaskItem): string {
+  const marker = task.checked ? "[x]" : "[ ]";
+  return `- ${marker} ${task.content}`.trim();
+}
+
+function createTaskListSection(
+  container: Element,
+  title: string,
+  tasks: string[]
+): () => string[] {
+  const section = container.createDiv({ cls: "daily-note-flow-section" });
+  section.createEl("h3", { text: title });
+
+  const listEl = section.createDiv({ cls: "daily-note-flow-task-list" });
+  const taskRefs: Array<{ checkbox: HTMLInputElement; input: HTMLInputElement; row: HTMLElement }> = [];
+
+  const addTaskRow = (task: TaskItem) => {
+    const row = listEl.createDiv({ cls: "daily-note-flow-task-row" });
+    const checkbox = row.createEl("input", { type: "checkbox" }) as HTMLInputElement;
+    checkbox.checked = task.checked;
+    const input = row.createEl("input", {
+      type: "text",
+      cls: "daily-note-flow-grow",
+      value: task.content
+    }) as HTMLInputElement;
+    const deleteBtn = row.createEl("button", { text: "\u00d7", cls: "daily-note-flow-task-delete" });
+    deleteBtn.onclick = () => {
+      row.remove();
+    };
+    taskRefs.push({ checkbox, input, row });
+  };
+
+  for (const line of tasks) {
+    addTaskRow(parseTaskLine(line));
+  }
+
+  const addRow = section.createDiv({ cls: "daily-note-flow-task-row" });
+  const addInput = addRow.createEl("input", {
+    type: "text",
+    cls: "daily-note-flow-grow",
+    placeholder: `Add ${title.toLowerCase()}...`
+  }) as HTMLInputElement;
+  const addBtn = addRow.createEl("button", { text: "Add" });
+  const doAdd = () => {
+    if (!addInput.value.trim()) return;
+    addTaskRow({ checked: false, content: addInput.value.trim() });
+    addInput.value = "";
+    addInput.focus();
+  };
+  addBtn.onclick = doAdd;
+  addInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doAdd();
+    }
+  });
+
+  return () => {
+    const result: string[] = [];
+    for (const ref of taskRefs) {
+      if (!ref.row.isConnected) continue;
+      const content = ref.input.value.trim();
+      if (!content) continue;
+      result.push(renderTaskLine({ checked: ref.checkbox.checked, content }));
+    }
+    return result;
+  };
 }
 
 function formatRecordLines(records: DailyRecord[]): string[] {
@@ -683,12 +765,8 @@ class DailyNoteFlowView extends ItemView {
     const date = new Date();
     const note = await this.plugin.readDailyNote(date);
 
-    const taskSection = container.createDiv({ cls: "daily-note-flow-section" });
-    taskSection.createEl("h3", { text: "Daily Tasks / Todos" });
-    const tasksInput = taskSection.createEl("textarea", { cls: "daily-note-flow-textarea" });
-    tasksInput.value = note.tasks.join("\n");
-    const todosInput = taskSection.createEl("textarea", { cls: "daily-note-flow-textarea" });
-    todosInput.value = note.todos.join("\n");
+    const getTasks = createTaskListSection(container, "Daily Tasks", note.tasks);
+    const getTodos = createTaskListSection(container, "Todos", note.todos);
 
     const recordsSection = container.createDiv({ cls: "daily-note-flow-section" });
     recordsSection.createEl("h3", { text: "Records" });
@@ -745,8 +823,8 @@ class DailyNoteFlowView extends ItemView {
     const actions = container.createDiv({ cls: "daily-note-flow-actions" });
     const saveButton = actions.createEl("button", { text: "Save" });
     saveButton.onclick = async () => {
-      note.tasks = tasksInput.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-      note.todos = todosInput.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      note.tasks = getTasks();
+      note.todos = getTodos();
       note.summary = summaryInput.value.trim();
       await this.plugin.saveDailyNote(date, note);
       new Notice("Saved");
