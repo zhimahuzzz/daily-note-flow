@@ -144,7 +144,8 @@ function renderTaskLine(task: TaskItem): string {
 function createTaskListSection(
   container: Element,
   title: string,
-  tasks: string[]
+  tasks: string[],
+  onChange?: () => void
 ): () => string[] {
   const section = container.createDiv({ cls: "daily-note-flow-section" });
   section.createEl("h3", { text: title });
@@ -156,14 +157,17 @@ function createTaskListSection(
     const row = listEl.createDiv({ cls: "daily-note-flow-task-row" });
     const checkbox = row.createEl("input", { type: "checkbox" }) as HTMLInputElement;
     checkbox.checked = task.checked;
+    checkbox.addEventListener("change", () => { onChange?.(); });
     const input = row.createEl("input", {
       type: "text",
       cls: "daily-note-flow-grow",
       value: task.content
     }) as HTMLInputElement;
+    input.addEventListener("input", () => { onChange?.(); });
     const deleteBtn = row.createEl("button", { text: "\u00d7", cls: "daily-note-flow-task-delete" });
     deleteBtn.onclick = () => {
       row.remove();
+      onChange?.();
     };
     taskRefs.push({ checkbox, input, row });
   };
@@ -184,6 +188,7 @@ function createTaskListSection(
     addTaskRow({ checked: false, content: addInput.value.trim() });
     addInput.value = "";
     addInput.focus();
+    onChange?.();
   };
   addBtn.onclick = doAdd;
   addInput.addEventListener("keydown", (e) => {
@@ -741,6 +746,18 @@ export default class DailyNoteFlowPlugin extends Plugin {
 }
 
 class DailyNoteFlowView extends ItemView {
+  private autosaveTimer: number | null = null;
+  private saveStatusEl: HTMLElement | null = null;
+  private getTasksFromDom: (() => string[]) | null = null;
+  private getTodosFromDom: (() => string[]) | null = null;
+  private summaryInputEl: HTMLTextAreaElement | null = null;
+  private recordRefs: Array<{
+    period: TimePeriod;
+    timeInput: HTMLInputElement;
+    contentInput: HTMLInputElement;
+  }> = [];
+  private currentDate: Date = new Date();
+
   constructor(leaf: WorkspaceLeaf, private plugin: DailyNoteFlowPlugin) {
     super(leaf);
   }
@@ -757,16 +774,82 @@ class DailyNoteFlowView extends ItemView {
     await this.renderView();
   }
 
+  async onClose() {
+    await this.flushAutoSave();
+  }
+
+  private setSaveStatus(status: "saved" | "saving" | "unsaved" | "failed") {
+    if (!this.saveStatusEl) return;
+    const textMap = { saved: "Saved", saving: "Saving...", unsaved: "Unsaved", failed: "Save failed" };
+    this.saveStatusEl.setText(textMap[status]);
+    this.saveStatusEl.className = `daily-note-flow-save-status status-${status}`;
+  }
+
+  private collectCurrentNoteFromDom(): ParsedDailyNote {
+    const note = createEmptyNote();
+    note.tasks = this.getTasksFromDom ? this.getTasksFromDom() : [];
+    note.todos = this.getTodosFromDom ? this.getTodosFromDom() : [];
+    note.summary = this.summaryInputEl ? this.summaryInputEl.value.trim() : "";
+    for (const ref of this.recordRefs) {
+      if (!ref.contentInput.isConnected) continue;
+      const content = ref.contentInput.value.trim();
+      if (!content) continue;
+      note.records[ref.period].push({ time: ref.timeInput.value, content });
+    }
+    for (const period of ["morning", "afternoon", "evening"] as TimePeriod[]) {
+      note.records[period].sort((a, b) => a.time.localeCompare(b.time));
+    }
+    return note;
+  }
+
+  private scheduleAutoSave() {
+    this.setSaveStatus("unsaved");
+    if (this.autosaveTimer !== null) {
+      window.clearTimeout(this.autosaveTimer);
+    }
+    this.autosaveTimer = window.setTimeout(() => {
+      void this.doAutoSave();
+    }, 800);
+  }
+
+  private async doAutoSave() {
+    if (this.autosaveTimer !== null) {
+      window.clearTimeout(this.autosaveTimer);
+      this.autosaveTimer = null;
+    }
+    this.setSaveStatus("saving");
+    try {
+      const note = this.collectCurrentNoteFromDom();
+      await this.plugin.saveDailyNote(this.currentDate, note);
+      this.setSaveStatus("saved");
+    } catch (error) {
+      this.setSaveStatus("failed");
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`Save failed: ${message}`);
+    }
+  }
+
+  private async flushAutoSave() {
+    if (this.autosaveTimer !== null) {
+      await this.doAutoSave();
+    }
+  }
+
   async renderView() {
+    await this.flushAutoSave();
+
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("daily-note-flow-view");
 
-    const date = new Date();
+    this.currentDate = new Date();
+    const date = this.currentDate;
     const note = await this.plugin.readDailyNote(date);
 
-    const getTasks = createTaskListSection(container, "Daily Tasks", note.tasks);
-    const getTodos = createTaskListSection(container, "Todos", note.todos);
+    this.recordRefs = [];
+
+    this.getTasksFromDom = createTaskListSection(container, "Daily Tasks", note.tasks, () => this.scheduleAutoSave());
+    this.getTodosFromDom = createTaskListSection(container, "Todos", note.todos, () => this.scheduleAutoSave());
 
     const recordsSection = container.createDiv({ cls: "daily-note-flow-section" });
     recordsSection.createEl("h3", { text: "Records" });
@@ -781,6 +864,7 @@ class DailyNoteFlowView extends ItemView {
     const addButton = addRow.createEl("button", { text: "Add" });
     addButton.onclick = async () => {
       if (!addContentInput.value.trim()) return;
+      await this.flushAutoSave();
       await this.plugin.appendRecord(addContentInput.value.trim(), addTimeInput.value);
       await this.renderView();
     };
@@ -788,7 +872,7 @@ class DailyNoteFlowView extends ItemView {
       const label = period === "morning" ? "Morning" : period === "afternoon" ? "Afternoon" : "Evening";
       const group = recordsSection.createDiv({ cls: "daily-note-flow-record" });
       group.createEl("strong", { text: label });
-      note.records[period].forEach((record, index) => {
+      note.records[period].forEach((record) => {
         const row = group.createDiv({ cls: "daily-note-flow-record-row" });
         const timeInput = row.createEl("input", { type: "time" });
         timeInput.value = record.time;
@@ -798,15 +882,30 @@ class DailyNoteFlowView extends ItemView {
           placeholder: "Record content"
         });
         contentInput.value = record.content;
+
+        this.recordRefs.push({ period, timeInput, contentInput });
+
+        contentInput.addEventListener("input", () => { this.scheduleAutoSave(); });
+        contentInput.addEventListener("blur", () => { void this.flushAutoSave(); });
+
+        timeInput.addEventListener("change", async () => {
+          await this.flushAutoSave();
+          await this.renderView();
+        });
+
         const saveRecordButton = row.createEl("button", { text: "Save" });
         saveRecordButton.onclick = async () => {
           if (!contentInput.value.trim()) return;
-          await this.plugin.updateRecord(date, period, index, timeInput.value, contentInput.value.trim());
+          await this.doAutoSave();
           await this.renderView();
         };
         const deleteRecordButton = row.createEl("button", { text: "Delete" });
         deleteRecordButton.onclick = async () => {
-          await this.plugin.deleteRecord(date, period, index);
+          await this.flushAutoSave();
+          const idx = this.recordRefs.findIndex((r) => r.timeInput === timeInput && r.contentInput === contentInput);
+          if (idx >= 0) this.recordRefs.splice(idx, 1);
+          row.remove();
+          await this.doAutoSave();
           await this.renderView();
         };
       });
@@ -817,23 +916,23 @@ class DailyNoteFlowView extends ItemView {
 
     const summarySection = container.createDiv({ cls: "daily-note-flow-section" });
     summarySection.createEl("h3", { text: "Summary" });
-    const summaryInput = summarySection.createEl("textarea", { cls: "daily-note-flow-textarea" });
-    summaryInput.value = note.summary;
+    this.summaryInputEl = summarySection.createEl("textarea", { cls: "daily-note-flow-textarea" });
+    this.summaryInputEl.value = note.summary;
+    this.summaryInputEl.addEventListener("input", () => { this.scheduleAutoSave(); });
+    this.summaryInputEl.addEventListener("blur", () => { void this.flushAutoSave(); });
 
     const actions = container.createDiv({ cls: "daily-note-flow-actions" });
+    this.saveStatusEl = actions.createEl("span", { cls: "daily-note-flow-save-status status-saved", text: "Saved" });
     const saveButton = actions.createEl("button", { text: "Save" });
     saveButton.onclick = async () => {
-      note.tasks = getTasks();
-      note.todos = getTodos();
-      note.summary = summaryInput.value.trim();
-      await this.plugin.saveDailyNote(date, note);
+      await this.doAutoSave();
       new Notice("Saved");
-      await this.renderView();
     };
     const openButton = actions.createEl("button", { text: "Open Today" });
     openButton.onclick = async () => this.plugin.createOrOpenTodayNote();
     const aiButton = actions.createEl("button", { text: "AI Summary" });
     aiButton.onclick = async () => {
+      await this.flushAutoSave();
       await this.plugin.regenerateSummary();
       await this.renderView();
     };
