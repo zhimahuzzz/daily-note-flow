@@ -1,6 +1,8 @@
 import {
   App,
   ItemView,
+  Menu,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -75,6 +77,20 @@ function formatDate(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+const CHINESE_WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+
+function formatChineseDateKey(date: Date) {
+  return `${date.getFullYear()}年${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${CHINESE_WEEKDAYS[date.getDay()]}`;
+}
+
+function isFutureDate(date: Date): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  return target.getTime() > today.getTime();
+}
+
 function formatTime(date: Date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -115,13 +131,25 @@ function isDateInRange(date: Date, start: Date, end: Date) {
 }
 
 function parseDateKey(key: string) {
+  // 旧格式：2026-08-26
   const parts = key.split("-");
-  if (parts.length !== 3) return null;
-  const year = Number(parts[0]);
-  const month = Number(parts[1]);
-  const day = Number(parts[2]);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
+  if (parts.length === 3) {
+    const year = Number(parts[0]);
+    const month = Number(parts[1]);
+    const day = Number(parts[2]);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day);
+  }
+  // 新格式：2026年08月26日 星期三
+  const match = /^(\d{4})年(\d{2})月(\d{2})日/.exec(key);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day);
+  }
+  return null;
 }
 
 function formatTaskLine(line: string) {
@@ -145,7 +173,8 @@ function createTaskListSection(
   container: Element,
   title: string,
   tasks: string[],
-  onChange?: () => void
+  onChange?: () => void,
+  onStructuralChange?: () => void
 ): () => string[] {
   const section = container.createDiv({ cls: "daily-note-flow-section" });
   section.createEl("h3", { text: title });
@@ -167,7 +196,7 @@ function createTaskListSection(
     const deleteBtn = row.createEl("button", { text: "\u00d7", cls: "daily-note-flow-task-delete" });
     deleteBtn.onclick = () => {
       row.remove();
-      onChange?.();
+      onStructuralChange?.();
     };
     taskRefs.push({ checkbox, input, row });
   };
@@ -188,7 +217,7 @@ function createTaskListSection(
     addTaskRow({ checked: false, content: addInput.value.trim() });
     addInput.value = "";
     addInput.focus();
-    onChange?.();
+    onStructuralChange?.();
   };
   addBtn.onclick = doAdd;
   addInput.addEventListener("keydown", (e) => {
@@ -280,7 +309,7 @@ function createEmptyNote(): ParsedDailyNote {
 
 function renderDailyNote(date: Date, parsed: ParsedDailyNote) {
   const lines: string[] = [];
-  lines.push(`# ${formatDate(date)} Daily Note`);
+  lines.push(`# ${formatChineseDateKey(date)}`);
   lines.push("");
   lines.push("## Daily Tasks");
   lines.push(...parsed.tasks);
@@ -300,7 +329,15 @@ function renderDailyNote(date: Date, parsed: ParsedDailyNote) {
     }
     for (const item of items) {
       const content = item.content.trim();
-      lines.push(content ? `- ${item.time} ${content}` : `- ${item.time}`);
+      if (content) {
+        const contentLines = content.split(/\r?\n/);
+        lines.push(`- ${item.time} ${contentLines[0]}`);
+        for (let i = 1; i < contentLines.length; i++) {
+          lines.push(`  ${contentLines[i]}`);
+        }
+      } else {
+        lines.push(`- ${item.time}`);
+      }
     }
     lines.push("");
   }
@@ -352,10 +389,17 @@ function parseDailyNote(content: string): ParsedDailyNote {
       note.todos.push(line);
       continue;
     }
-    if (section === "records" && recordPeriod && line.startsWith("- ")) {
-      const record = parseRecordLine(line);
-      if (record) note.records[recordPeriod].push(record);
-      continue;
+    if (section === "records" && recordPeriod) {
+      if (line.startsWith("- ")) {
+        const record = parseRecordLine(line);
+        if (record) note.records[recordPeriod].push(record);
+        continue;
+      }
+      if (line.startsWith("  ") && note.records[recordPeriod].length > 0) {
+        const lastRecord = note.records[recordPeriod][note.records[recordPeriod].length - 1];
+        lastRecord.content += "\n" + line.substring(2);
+        continue;
+      }
     }
     if (section === "summary") {
       note.summary = `${note.summary}\n${line}`.trim();
@@ -515,16 +559,29 @@ export default class DailyNoteFlowPlugin extends Plugin {
 
   async getDailyFile(date = new Date()): Promise<TFile> {
     const folder = getDailyFolder(this.settings.rootFolder);
-    const path = `${folder}/${formatDate(date)}.md`;
-    let file = this.app.vault.getAbstractFileByPath(path);
+    const newPath = `${folder}/${formatChineseDateKey(date)}.md`;
+    const oldPath = `${folder}/${formatDate(date)}.md`;
+
+    let file = this.app.vault.getAbstractFileByPath(newPath);
+    if (file instanceof TFile) return file;
+
+    file = this.app.vault.getAbstractFileByPath(oldPath);
+    if (file instanceof TFile) return file;
+
+    await ensureFolder(this.app, folder);
+    file = await this.app.vault.create(newPath, renderDailyNote(date, createEmptyNote()));
     if (!(file instanceof TFile)) {
-      await ensureFolder(this.app, folder);
-      file = await this.app.vault.create(path, renderDailyNote(date, createEmptyNote()));
-    }
-    if (!(file instanceof TFile)) {
-      throw new Error(`Unable to create daily note at ${path}`);
+      throw new Error(`Unable to create daily note at ${newPath}`);
     }
     return file;
+  }
+
+  hasDailyNote(date: Date): boolean {
+    const folder = getDailyFolder(this.settings.rootFolder);
+    const newPath = `${folder}/${formatChineseDateKey(date)}.md`;
+    const oldPath = `${folder}/${formatDate(date)}.md`;
+    return this.app.vault.getAbstractFileByPath(newPath) instanceof TFile ||
+           this.app.vault.getAbstractFileByPath(oldPath) instanceof TFile;
   }
 
   async readDailyNote(date = new Date()) {
@@ -537,8 +594,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
     await this.app.vault.modify(file, renderDailyNote(date, note));
   }
 
-  async appendRecord(content: string, time = formatTime(new Date())) {
-    const date = new Date();
+  async appendRecord(content: string, time = formatTime(new Date()), date: Date = new Date()) {
     const note = await this.readDailyNote(date);
     const period = timePeriodFromTime(time);
     note.records[period].push({ time, content });
@@ -695,12 +751,11 @@ export default class DailyNoteFlowPlugin extends Plugin {
     new Notice("Opened today note");
   }
 
-  async regenerateSummary() {
+  async regenerateSummary(date: Date = new Date()) {
     if (!this.settings.deepseekApiKey) {
       new Notice("Set DeepSeek API key first");
       return;
     }
-    const date = new Date();
     const note = await this.readDailyNote(date);
     const source = renderDailyNote(date, note);
     try {
@@ -745,6 +800,39 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 }
 
+class ConfirmModal extends Modal {
+  private confirmed = false;
+  private resolveFn: ((value: boolean) => void) | null = null;
+
+  constructor(app: App, private message: string, private confirmText = "创建") {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("p", { text: this.message });
+    const row = contentEl.createDiv({ cls: "daily-note-flow-modal-actions" });
+    const cancelBtn = row.createEl("button", { text: "取消" });
+    const confirmBtn = row.createEl("button", { text: this.confirmText, cls: "mod-cta" });
+    cancelBtn.onclick = () => { this.confirmed = false; this.close(); };
+    confirmBtn.onclick = () => { this.confirmed = true; this.close(); };
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    if (this.resolveFn) {
+      this.resolveFn(this.confirmed);
+      this.resolveFn = null;
+    }
+  }
+
+  waitForConfirm(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.resolveFn = resolve;
+    });
+  }
+}
+
 class DailyNoteFlowView extends ItemView {
   private autosaveTimer: number | null = null;
   private saveStatusEl: HTMLElement | null = null;
@@ -754,9 +842,11 @@ class DailyNoteFlowView extends ItemView {
   private recordRefs: Array<{
     period: TimePeriod;
     timeInput: HTMLInputElement;
-    contentInput: HTMLInputElement;
+    contentInput: HTMLTextAreaElement;
   }> = [];
   private currentDate: Date = new Date();
+  private selectedDate: Date | null = null;
+  private calendarMonth: Date | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: DailyNoteFlowPlugin) {
     super(leaf);
@@ -794,7 +884,8 @@ class DailyNoteFlowView extends ItemView {
       if (!ref.contentInput.isConnected) continue;
       const content = ref.contentInput.value.trim();
       if (!content) continue;
-      note.records[ref.period].push({ time: ref.timeInput.value, content });
+      const period = timePeriodFromTime(ref.timeInput.value);
+      note.records[period].push({ time: ref.timeInput.value, content });
     }
     for (const period of ["morning", "afternoon", "evening"] as TimePeriod[]) {
       note.records[period].sort((a, b) => a.time.localeCompare(b.time));
@@ -825,6 +916,7 @@ class DailyNoteFlowView extends ItemView {
     } catch (error) {
       this.setSaveStatus("failed");
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[Daily Note Flow] Auto-save failed:", error);
       new Notice(`Save failed: ${message}`);
     }
   }
@@ -835,39 +927,177 @@ class DailyNoteFlowView extends ItemView {
     }
   }
 
+  private getDatesWithNotes(): Set<string> {
+    const dates = new Set<string>();
+    const folder = getDailyFolder(this.plugin.settings.rootFolder);
+    const folderFile = this.plugin.app.vault.getAbstractFileByPath(folder);
+    if (!folderFile || !(folderFile instanceof TFolder)) return dates;
+    for (const child of folderFile.children as Array<TFile | TFolder>) {
+      if (!(child instanceof TFile) || !child.path.endsWith(".md")) continue;
+      dates.add(child.basename);
+    }
+    return dates;
+  }
+
+  private renderCalendar(container: Element) {
+    if (!this.calendarMonth || !this.selectedDate) return;
+    const section = container.createDiv({ cls: "daily-note-flow-section daily-note-flow-calendar" });
+    const header = section.createDiv({ cls: "daily-note-flow-calendar-header" });
+
+    const prevBtn = header.createEl("button", { text: "\u2039", cls: "daily-note-flow-calendar-nav" });
+    prevBtn.onclick = () => {
+      if (!this.calendarMonth) return;
+      this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() - 1, 1);
+      void this.renderView();
+    };
+
+    const title = header.createEl("span", { cls: "daily-note-flow-calendar-title" });
+    title.setText(`${this.calendarMonth.getFullYear()}年${pad(this.calendarMonth.getMonth() + 1)}月`);
+
+    const nextBtn = header.createEl("button", { text: "\u203a", cls: "daily-note-flow-calendar-nav" });
+    nextBtn.onclick = () => {
+      if (!this.calendarMonth) return;
+      this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() + 1, 1);
+      void this.renderView();
+    };
+
+    const grid = section.createDiv({ cls: "daily-note-flow-calendar-grid" });
+    const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+    for (const w of weekdays) {
+      grid.createDiv({ cls: "daily-note-flow-calendar-weekday", text: w });
+    }
+
+    const noteDates = this.getDatesWithNotes();
+    const year = this.calendarMonth.getFullYear();
+    const month = this.calendarMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startWeekday = (firstDay.getDay() + 6) % 7;
+
+    for (let i = 0; i < startWeekday; i++) {
+      grid.createDiv({ cls: "daily-note-flow-calendar-day empty" });
+    }
+
+    const today = new Date();
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      const cellDate = new Date(year, month, d);
+      const dayEl = grid.createDiv({ cls: "daily-note-flow-calendar-day" });
+      dayEl.setText(String(d));
+
+      if (cellDate.toDateString() === today.toDateString()) {
+        dayEl.addClass("is-today");
+      }
+      if (cellDate.toDateString() === this.selectedDate.toDateString()) {
+        dayEl.addClass("is-selected");
+      }
+      if (noteDates.has(formatDate(cellDate)) || noteDates.has(formatChineseDateKey(cellDate))) {
+        dayEl.addClass("has-note");
+      }
+
+      dayEl.onclick = async () => {
+        await this.flushAutoSave();
+        if (!this.plugin.hasDailyNote(cellDate)) {
+          const modal = new ConfirmModal(this.app, "这一天还没有日记，是否创建并补充记录？");
+          modal.open();
+          const confirmed = await modal.waitForConfirm();
+          if (!confirmed) return;
+        }
+        this.selectedDate = cellDate;
+        this.calendarMonth = new Date(year, month, 1);
+        await this.renderView();
+      };
+    }
+  }
+
   async renderView() {
     await this.flushAutoSave();
 
-    const container = this.containerEl.children[1];
+    const container = this.contentEl;
     container.empty();
     container.addClass("daily-note-flow-view");
 
-    this.currentDate = new Date();
-    const date = this.currentDate;
+    if (!this.selectedDate) this.selectedDate = new Date();
+    if (!this.calendarMonth) {
+      this.calendarMonth = new Date(this.selectedDate.getFullYear(), this.selectedDate.getMonth(), 1);
+    }
+
+    const date = this.selectedDate;
+    this.currentDate = date;
     const note = await this.plugin.readDailyNote(date);
 
     this.recordRefs = [];
 
-    this.getTasksFromDom = createTaskListSection(container, "Daily Tasks", note.tasks, () => this.scheduleAutoSave());
-    this.getTodosFromDom = createTaskListSection(container, "Todos", note.todos, () => this.scheduleAutoSave());
+    this.renderCalendar(container);
+
+    this.getTasksFromDom = createTaskListSection(
+      container, "Daily Tasks", note.tasks,
+      () => this.scheduleAutoSave(),
+      () => { void this.doAutoSave(); }
+    );
+    this.getTodosFromDom = createTaskListSection(
+      container, "Todos", note.todos,
+      () => this.scheduleAutoSave(),
+      () => { void this.doAutoSave(); }
+    );
 
     const recordsSection = container.createDiv({ cls: "daily-note-flow-section" });
     recordsSection.createEl("h3", { text: "Records" });
     const addRow = recordsSection.createDiv({ cls: "daily-note-flow-record-row" });
     const addTimeInput = addRow.createEl("input", { type: "time" });
     addTimeInput.value = formatTime(new Date());
-    const addContentInput = addRow.createEl("input", {
-      type: "text",
-      cls: "daily-note-flow-grow",
-      placeholder: "Record content"
+    const addContentInput = addRow.createEl("textarea", {
+      cls: "daily-note-flow-grow daily-note-flow-record-textarea",
+      placeholder: "Record content (Enter to add, Shift+Enter for newline)"
     });
+    addContentInput.rows = 1;
     const addButton = addRow.createEl("button", { text: "Add" });
-    addButton.onclick = async () => {
+    const addRecord = async () => {
       if (!addContentInput.value.trim()) return;
       await this.flushAutoSave();
-      await this.plugin.appendRecord(addContentInput.value.trim(), addTimeInput.value);
+      await this.plugin.appendRecord(addContentInput.value.trim(), addTimeInput.value, this.selectedDate ?? new Date());
       await this.renderView();
     };
+    const autoResize = (el: HTMLTextAreaElement) => {
+      el.style.height = "auto";
+      el.style.height = el.scrollHeight + "px";
+    };
+    addButton.onclick = addRecord;
+    addContentInput.addEventListener("input", () => {
+      this.scheduleAutoSave();
+      autoResize(addContentInput);
+    });
+    addContentInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void addRecord();
+        return;
+      }
+      if (e.key === "Enter" && e.shiftKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const start = addContentInput.selectionStart;
+        const end = addContentInput.selectionEnd;
+        const value = addContentInput.value;
+        addContentInput.value = value.substring(0, start) + "\n" + value.substring(end);
+        addContentInput.selectionStart = addContentInput.selectionEnd = start + 1;
+        autoResize(addContentInput);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const start = addContentInput.selectionStart;
+        const end = addContentInput.selectionEnd;
+        const value = addContentInput.value;
+        addContentInput.value = value.substring(0, start) + "### " + value.substring(end);
+        addContentInput.selectionStart = addContentInput.selectionEnd = start + 4;
+        autoResize(addContentInput);
+        this.scheduleAutoSave();
+        return;
+      }
+    });
+    autoResize(addContentInput);
     for (const period of ["morning", "afternoon", "evening"] as TimePeriod[]) {
       const label = period === "morning" ? "Morning" : period === "afternoon" ? "Afternoon" : "Evening";
       const group = recordsSection.createDiv({ cls: "daily-note-flow-record" });
@@ -876,29 +1106,58 @@ class DailyNoteFlowView extends ItemView {
         const row = group.createDiv({ cls: "daily-note-flow-record-row" });
         const timeInput = row.createEl("input", { type: "time" });
         timeInput.value = record.time;
-        const contentInput = row.createEl("input", {
-          type: "text",
-          cls: "daily-note-flow-grow",
+        const contentInput = row.createEl("textarea", {
+          cls: "daily-note-flow-grow daily-note-flow-record-textarea",
           placeholder: "Record content"
         });
         contentInput.value = record.content;
+        contentInput.rows = 1;
+
+        const autoResize = (el: HTMLTextAreaElement) => {
+          el.style.height = "auto";
+          el.style.height = el.scrollHeight + "px";
+        };
 
         this.recordRefs.push({ period, timeInput, contentInput });
 
-        contentInput.addEventListener("input", () => { this.scheduleAutoSave(); });
+        contentInput.addEventListener("input", () => {
+          this.scheduleAutoSave();
+          autoResize(contentInput);
+        });
         contentInput.addEventListener("blur", () => { void this.flushAutoSave(); });
+        contentInput.addEventListener("keydown", (e) => {
+          if (e.key === "Tab") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const start = contentInput.selectionStart;
+            const end = contentInput.selectionEnd;
+            const value = contentInput.value;
+            contentInput.value = value.substring(0, start) + "### " + value.substring(end);
+            contentInput.selectionStart = contentInput.selectionEnd = start + 4;
+            autoResize(contentInput);
+            this.scheduleAutoSave();
+            return;
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const start = contentInput.selectionStart;
+            const end = contentInput.selectionEnd;
+            const value = contentInput.value;
+            contentInput.value = value.substring(0, start) + "\n" + value.substring(end);
+            contentInput.selectionStart = contentInput.selectionEnd = start + 1;
+            autoResize(contentInput);
+            this.scheduleAutoSave();
+            return;
+          }
+        });
+        autoResize(contentInput);
 
         timeInput.addEventListener("change", async () => {
-          await this.flushAutoSave();
+          await this.doAutoSave();
           await this.renderView();
         });
 
-        const saveRecordButton = row.createEl("button", { text: "Save" });
-        saveRecordButton.onclick = async () => {
-          if (!contentInput.value.trim()) return;
-          await this.doAutoSave();
-          await this.renderView();
-        };
         const deleteRecordButton = row.createEl("button", { text: "Delete" });
         deleteRecordButton.onclick = async () => {
           await this.flushAutoSave();
@@ -929,29 +1188,34 @@ class DailyNoteFlowView extends ItemView {
       new Notice("Saved");
     };
     const openButton = actions.createEl("button", { text: "Open Today" });
-    openButton.onclick = async () => this.plugin.createOrOpenTodayNote();
+    openButton.onclick = async () => {
+      await this.flushAutoSave();
+      this.selectedDate = new Date();
+      this.calendarMonth = new Date(this.selectedDate.getFullYear(), this.selectedDate.getMonth(), 1);
+      await this.renderView();
+      await this.plugin.createOrOpenTodayNote();
+    };
     const aiButton = actions.createEl("button", { text: "AI Summary" });
     aiButton.onclick = async () => {
       await this.flushAutoSave();
-      await this.plugin.regenerateSummary();
+      await this.plugin.regenerateSummary(this.selectedDate ?? new Date());
       await this.renderView();
     };
-    const weekButton = actions.createEl("button", { text: "Weekly Summary" });
-    weekButton.onclick = async () => {
-      await this.plugin.prepareWeeklySummaryPreview(date);
-    };
-    const weekAiButton = actions.createEl("button", { text: "AI Weekly" });
-    weekAiButton.onclick = async () => {
-      await this.plugin.prepareWeeklySummaryPreview(date);
-    };
-    const monthButton = actions.createEl("button", { text: "Monthly Summary" });
-    monthButton.onclick = async () => {
-      await this.plugin.prepareMonthlySummaryPreview(date);
-    };
-    const monthAiButton = actions.createEl("button", { text: "AI Monthly" });
-    monthAiButton.onclick = async () => {
-      await this.plugin.prepareMonthlySummaryPreview(date);
-    };
+    const reviewsButton = actions.createEl("button", { text: "Reviews" });
+    reviewsButton.addEventListener("click", (e) => {
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item.setTitle("Weekly Summary").onClick(() => {
+          void this.plugin.prepareWeeklySummaryPreview(date);
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("Monthly Summary").onClick(() => {
+          void this.plugin.prepareMonthlySummaryPreview(date);
+        })
+      );
+      menu.showAtMouseEvent(e);
+    });
   }
 }
 
@@ -969,7 +1233,7 @@ class DailyNoteFlowPreviewView extends ItemView {
   }
 
   async onOpen() {
-    const container = this.containerEl.children[1];
+    const container = this.contentEl;
     container.empty();
     container.addClass("daily-note-flow-view");
     const state = this.plugin.summaryPreviewState;
