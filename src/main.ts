@@ -83,14 +83,6 @@ function formatChineseDateKey(date: Date) {
   return `${date.getFullYear()}年${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${CHINESE_WEEKDAYS[date.getDay()]}`;
 }
 
-function isFutureDate(date: Date): boolean {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(date);
-  target.setHours(0, 0, 0, 0);
-  return target.getTime() > today.getTime();
-}
-
 function formatTime(date: Date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -184,14 +176,14 @@ function createTaskListSection(
 
   const addTaskRow = (task: TaskItem) => {
     const row = listEl.createDiv({ cls: "daily-note-flow-task-row" });
-    const checkbox = row.createEl("input", { type: "checkbox" }) as HTMLInputElement;
+    const checkbox = row.createEl("input", { type: "checkbox" });
     checkbox.checked = task.checked;
     checkbox.addEventListener("change", () => { onChange?.(); });
     const input = row.createEl("input", {
       type: "text",
       cls: "daily-note-flow-grow",
       value: task.content
-    }) as HTMLInputElement;
+    });
     input.addEventListener("input", () => { onChange?.(); });
     const deleteBtn = row.createEl("button", { text: "\u00d7", cls: "daily-note-flow-task-delete" });
     deleteBtn.onclick = () => {
@@ -210,7 +202,7 @@ function createTaskListSection(
     type: "text",
     cls: "daily-note-flow-grow",
     placeholder: `Add ${title.toLowerCase()}...`
-  }) as HTMLInputElement;
+  });
   const addBtn = addRow.createEl("button", { text: "Add" });
   const doAdd = () => {
     if (!addInput.value.trim()) return;
@@ -353,8 +345,8 @@ function parseDailyNote(content: string): ParsedDailyNote {
   let section = "";
   let recordPeriod: TimePeriod | null = null;
 
-  for (const rawLine of lines as string[]) {
-    const line: string = rawLine.trimEnd();
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
     if (isHeading(line, 2, "Daily Tasks")) {
       section = "tasks";
       recordPeriod = null;
@@ -698,7 +690,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
       }
       await this.app.vault.modify(file, content.endsWith("\n") ? content : `${content}\n`);
       new Notice(`${kind === "weekly" ? "Weekly" : "Monthly"} summary polished`);
-    } catch (error) {
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       new Notice(`AI Summary failed: ${message}`);
       throw error;
@@ -792,7 +784,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
       note.summary = content;
       await this.saveDailyNote(date, note);
       new Notice("Summary updated");
-    } catch (error) {
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       new Notice(`AI Summary failed: ${message}`);
       throw error;
@@ -913,7 +905,7 @@ class DailyNoteFlowView extends ItemView {
       const note = this.collectCurrentNoteFromDom();
       await this.plugin.saveDailyNote(this.currentDate, note);
       this.setSaveStatus("saved");
-    } catch (error) {
+    } catch (error: unknown) {
       this.setSaveStatus("failed");
       const message = error instanceof Error ? error.message : String(error);
       console.error("[Daily Note Flow] Auto-save failed:", error);
@@ -1057,14 +1049,9 @@ class DailyNoteFlowView extends ItemView {
       await this.plugin.appendRecord(addContentInput.value.trim(), addTimeInput.value, this.selectedDate ?? new Date());
       await this.renderView();
     };
-    const autoResize = (el: HTMLTextAreaElement) => {
-      el.style.height = "auto";
-      el.style.height = el.scrollHeight + "px";
-    };
     addButton.onclick = addRecord;
     addContentInput.addEventListener("input", () => {
       this.scheduleAutoSave();
-      autoResize(addContentInput);
     });
     addContentInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -1081,7 +1068,6 @@ class DailyNoteFlowView extends ItemView {
         const value = addContentInput.value;
         addContentInput.value = value.substring(0, start) + "\n" + value.substring(end);
         addContentInput.selectionStart = addContentInput.selectionEnd = start + 1;
-        autoResize(addContentInput);
         return;
       }
       if (e.key === "Tab") {
@@ -1092,12 +1078,10 @@ class DailyNoteFlowView extends ItemView {
         const value = addContentInput.value;
         addContentInput.value = value.substring(0, start) + "### " + value.substring(end);
         addContentInput.selectionStart = addContentInput.selectionEnd = start + 4;
-        autoResize(addContentInput);
         this.scheduleAutoSave();
         return;
       }
     });
-    autoResize(addContentInput);
     for (const period of ["morning", "afternoon", "evening"] as TimePeriod[]) {
       const label = period === "morning" ? "Morning" : period === "afternoon" ? "Afternoon" : "Evening";
       const group = recordsSection.createDiv({ cls: "daily-note-flow-record" });
@@ -1113,16 +1097,10 @@ class DailyNoteFlowView extends ItemView {
         contentInput.value = record.content;
         contentInput.rows = 1;
 
-        const autoResize = (el: HTMLTextAreaElement) => {
-          el.style.height = "auto";
-          el.style.height = el.scrollHeight + "px";
-        };
-
         this.recordRefs.push({ period, timeInput, contentInput });
 
         contentInput.addEventListener("input", () => {
           this.scheduleAutoSave();
-          autoResize(contentInput);
         });
         contentInput.addEventListener("blur", () => { void this.flushAutoSave(); });
         contentInput.addEventListener("keydown", (e) => {
@@ -1134,7 +1112,6 @@ class DailyNoteFlowView extends ItemView {
             const value = contentInput.value;
             contentInput.value = value.substring(0, start) + "### " + value.substring(end);
             contentInput.selectionStart = contentInput.selectionEnd = start + 4;
-            autoResize(contentInput);
             this.scheduleAutoSave();
             return;
           }
@@ -1146,16 +1123,16 @@ class DailyNoteFlowView extends ItemView {
             const value = contentInput.value;
             contentInput.value = value.substring(0, start) + "\n" + value.substring(end);
             contentInput.selectionStart = contentInput.selectionEnd = start + 1;
-            autoResize(contentInput);
             this.scheduleAutoSave();
             return;
           }
         });
-        autoResize(contentInput);
 
-        timeInput.addEventListener("change", async () => {
-          await this.doAutoSave();
-          await this.renderView();
+        timeInput.addEventListener("change", () => {
+          void (async () => {
+            await this.doAutoSave();
+            await this.renderView();
+          })();
         });
 
         const deleteRecordButton = row.createEl("button", { text: "Delete" });
