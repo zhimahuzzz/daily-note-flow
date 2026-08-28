@@ -20,9 +20,22 @@ type TimePeriod = "morning" | "afternoon" | "evening";
 
 interface DailyNoteFlowSettings {
   rootFolder: string;
-  deepseekApiKey: string;
+  apiKey: string;
   aiBaseUrl: string;
   aiModel: string;
+  taskTemplates: TaskTemplate[];
+}
+
+type ScheduleType = "daily" | "weekly" | "interval" | "workdays";
+
+interface TaskTemplate {
+  id: string;
+  title: string;
+  enabled: boolean;
+  scheduleType: ScheduleType;
+  weekdays: number[];
+  intervalDays: number;
+  startDate: string;
 }
 
 interface DailyRecord {
@@ -58,9 +71,10 @@ type JsonObject = Record<string, unknown>;
 
 const DEFAULT_SETTINGS: DailyNoteFlowSettings = {
   rootFolder: "Daliy_Note",
-  deepseekApiKey: "",
+  apiKey: "",
   aiBaseUrl: "https://api.deepseek.com",
-  aiModel: "deepseek-v4-flash"
+  aiModel: "deepseek-v4-flash",
+  taskTemplates: []
 };
 
 function normalizeAiModel(value: string) {
@@ -299,6 +313,38 @@ function createEmptyNote(): ParsedDailyNote {
   };
 }
 
+function getTasksForDate(templates: TaskTemplate[], date: Date): string[] {
+  const result: string[] = [];
+  const dayOfWeek = date.getDay();
+  for (const tpl of templates) {
+    if (!tpl.enabled || !tpl.title.trim()) continue;
+    let match = false;
+    switch (tpl.scheduleType) {
+      case "daily":
+        match = true;
+        break;
+      case "workdays":
+        match = dayOfWeek >= 1 && dayOfWeek <= 5;
+        break;
+      case "weekly":
+        match = tpl.weekdays.includes(dayOfWeek);
+        break;
+      case "interval":
+        if (tpl.startDate) {
+          const start = new Date(tpl.startDate + "T00:00:00");
+          const diffMs = date.getTime() - start.getTime();
+          const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          match = diffDays >= 0 && diffDays % (tpl.intervalDays || 1) === 0;
+        }
+        break;
+    }
+    if (match) {
+      result.push(`- [ ] ${tpl.title.trim()}`);
+    }
+  }
+  return result;
+}
+
 function renderDailyNote(date: Date, parsed: ParsedDailyNote) {
   const lines: string[] = [];
   lines.push(`# ${formatChineseDateKey(date)}`);
@@ -530,8 +576,14 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const stored = await this.loadData() as Partial<DailyNoteFlowSettings> | null;
+    const stored = await this.loadData() as Partial<DailyNoteFlowSettings> & { deepseekApiKey?: string } | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
+    if (!this.settings.apiKey && stored?.deepseekApiKey) {
+      this.settings.apiKey = stored.deepseekApiKey;
+    }
+    if (!this.settings.taskTemplates) {
+      this.settings.taskTemplates = [];
+    }
   }
 
   async saveSettings() {
@@ -561,7 +613,9 @@ export default class DailyNoteFlowPlugin extends Plugin {
     if (file instanceof TFile) return file;
 
     await ensureFolder(this.app, folder);
-    file = await this.app.vault.create(newPath, renderDailyNote(date, createEmptyNote()));
+    const initialNote = createEmptyNote();
+    initialNote.tasks = getTasksForDate(this.settings.taskTemplates, date);
+    file = await this.app.vault.create(newPath, renderDailyNote(date, initialNote));
     if (!(file instanceof TFile)) {
       throw new Error(`Unable to create daily note at ${newPath}`);
     }
@@ -649,8 +703,8 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 
   async polishSummary(file: TFile, kind: "weekly" | "monthly") {
-    if (!this.settings.deepseekApiKey) {
-      new Notice("Set DeepSeek API key first");
+    if (!this.settings.apiKey) {
+      new Notice("Set API key first");
       return;
     }
     const source = await this.app.vault.read(file);
@@ -664,7 +718,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
         throw: false,
         contentType: "application/json",
         headers: {
-          Authorization: `Bearer ${this.settings.deepseekApiKey}`
+          Authorization: `Bearer ${this.settings.apiKey}`
         },
         body: JSON.stringify({
           model: normalizeAiModel(this.settings.aiModel),
@@ -686,7 +740,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
       }
       const content = extractAiContent(response.text);
       if (!content) {
-        throw new Error("DeepSeek returned an empty summary.");
+        throw new Error("AI returned an empty summary.");
       }
       await this.app.vault.modify(file, content.endsWith("\n") ? content : `${content}\n`);
       new Notice(`${kind === "weekly" ? "Weekly" : "Monthly"} summary polished`);
@@ -744,8 +798,8 @@ export default class DailyNoteFlowPlugin extends Plugin {
   }
 
   async regenerateSummary(date: Date = new Date()) {
-    if (!this.settings.deepseekApiKey) {
-      new Notice("Set DeepSeek API key first");
+    if (!this.settings.apiKey) {
+      new Notice("Set API key first");
       return;
     }
     const note = await this.readDailyNote(date);
@@ -757,7 +811,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
         throw: false,
         contentType: "application/json",
         headers: {
-          Authorization: `Bearer ${this.settings.deepseekApiKey}`
+          Authorization: `Bearer ${this.settings.apiKey}`
         },
         body: JSON.stringify({
           model: normalizeAiModel(this.settings.aiModel),
@@ -779,7 +833,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
       }
       const content = extractAiContent(response.text);
       if (!content) {
-        throw new Error("DeepSeek returned an empty summary.");
+        throw new Error("AI returned an empty summary.");
       }
       note.summary = content;
       await this.saveDailyNote(date, note);
@@ -1128,11 +1182,23 @@ class DailyNoteFlowView extends ItemView {
           }
         });
 
-        timeInput.addEventListener("change", () => {
+        let timeInputTimer: number | null = null;
+        const applyTimeChange = () => {
           void (async () => {
             await this.doAutoSave();
             await this.renderView();
           })();
+        };
+        timeInput.addEventListener("input", () => {
+          if (timeInputTimer !== null) window.clearTimeout(timeInputTimer);
+          timeInputTimer = window.setTimeout(applyTimeChange, 250);
+        });
+        timeInput.addEventListener("change", () => {
+          if (timeInputTimer !== null) {
+            window.clearTimeout(timeInputTimer);
+            timeInputTimer = null;
+          }
+          applyTimeChange();
         });
 
         const deleteRecordButton = row.createEl("button", { text: "Delete" });
@@ -1239,6 +1305,8 @@ class DailyNoteFlowPreviewView extends ItemView {
 }
 
 class DailyNoteFlowSettingTab extends PluginSettingTab {
+  private activeTab: "tasks" | "api" = "tasks";
+
   constructor(app: App, private plugin: DailyNoteFlowPlugin) {
     super(app, plugin);
   }
@@ -1250,7 +1318,151 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl)
+
+    const tabBar = containerEl.createDiv({ cls: "daily-note-flow-settings-tabs" });
+    const tasksTab = tabBar.createEl("button", { text: "Daily Tasks", cls: "daily-note-flow-settings-tab" });
+    const apiTab = tabBar.createEl("button", { text: "API", cls: "daily-note-flow-settings-tab" });
+
+    const updateTabStyles = () => {
+      tasksTab.toggleClass("is-active", this.activeTab === "tasks");
+      apiTab.toggleClass("is-active", this.activeTab === "api");
+    };
+
+    tasksTab.onclick = () => {
+      this.activeTab = "tasks";
+      this.display();
+    };
+    apiTab.onclick = () => {
+      this.activeTab = "api";
+      this.display();
+    };
+    updateTabStyles();
+
+    const content = containerEl.createDiv({ cls: "daily-note-flow-settings-content" });
+
+    if (this.activeTab === "tasks") {
+      this.renderTasksTab(content);
+    } else {
+      this.renderApiTab(content);
+    }
+  }
+
+  private renderTasksTab(container: HTMLElement) {
+    container.createEl("h3", { text: "Daily Task Templates" });
+    container.createEl("p", { text: "Tasks defined here will be automatically added to new daily notes based on their schedule.", cls: "setting-item-description" });
+
+    const templates = this.plugin.settings.taskTemplates;
+    for (let i = 0; i < templates.length; i++) {
+      this.renderTaskTemplateRow(container, i);
+    }
+
+    const addBtn = container.createEl("button", { text: "+ Add Task Template", cls: "mod-cta" });
+    addBtn.style.marginTop = "12px";
+    addBtn.onclick = async () => {
+      const newTemplate: TaskTemplate = {
+        id: `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title: "",
+        enabled: true,
+        scheduleType: "daily",
+        weekdays: [1, 2, 3, 4, 5],
+        intervalDays: 1,
+        startDate: formatDate(new Date())
+      };
+      this.plugin.settings.taskTemplates.push(newTemplate);
+      await this.plugin.saveSettings();
+      this.display();
+    };
+  }
+
+  private renderTaskTemplateRow(container: HTMLElement, index: number) {
+    const tpl = this.plugin.settings.taskTemplates[index];
+    const row = container.createDiv({ cls: "daily-note-flow-task-template-row" });
+
+    const topRow = row.createDiv({ cls: "daily-note-flow-task-template-top" });
+
+    const toggle = topRow.createEl("input", { type: "checkbox" });
+    toggle.checked = tpl.enabled;
+    toggle.onchange = async () => {
+      tpl.enabled = toggle.checked;
+      await this.plugin.saveSettings();
+    };
+
+    const titleInput = topRow.createEl("input", {
+      type: "text",
+      value: tpl.title,
+      placeholder: "Task title..."
+    });
+    titleInput.style.flex = "1";
+    titleInput.addEventListener("change", async () => {
+      tpl.title = titleInput.value.trim();
+      await this.plugin.saveSettings();
+    });
+
+    const delBtn = topRow.createEl("button", { text: "×", cls: "daily-note-flow-task-template-delete" });
+    delBtn.onclick = async () => {
+      this.plugin.settings.taskTemplates.splice(index, 1);
+      await this.plugin.saveSettings();
+      this.display();
+    };
+
+    const bottomRow = row.createDiv({ cls: "daily-note-flow-task-template-bottom" });
+
+    const scheduleSelect = bottomRow.createEl("select");
+    for (const opt of [
+      { value: "daily", label: "Every day" },
+      { value: "workdays", label: "Workdays (Mon-Fri)" },
+      { value: "weekly", label: "Specific weekdays" },
+      { value: "interval", label: "Every N days" }
+    ]) {
+      const o = scheduleSelect.createEl("option", { value: opt.value, text: opt.label });
+      if (opt.value === tpl.scheduleType) o.selected = true;
+    }
+    scheduleSelect.onchange = async () => {
+      tpl.scheduleType = scheduleSelect.value as ScheduleType;
+      await this.plugin.saveSettings();
+      this.display();
+    };
+
+    if (tpl.scheduleType === "weekly") {
+      const weekdayRow = bottomRow.createDiv({ cls: "daily-note-flow-weekday-row" });
+      const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      for (let d = 0; d < 7; d++) {
+        const label = weekdayRow.createEl("label", { cls: "daily-note-flow-weekday-label" });
+        const cb = label.createEl("input", { type: "checkbox" });
+        cb.checked = tpl.weekdays.includes(d);
+        cb.onchange = async () => {
+          if (cb.checked) {
+            if (!tpl.weekdays.includes(d)) tpl.weekdays.push(d);
+          } else {
+            tpl.weekdays = tpl.weekdays.filter((w) => w !== d);
+          }
+          await this.plugin.saveSettings();
+        };
+        label.createSpan({ text: dayLabels[d] });
+      }
+    }
+
+    if (tpl.scheduleType === "interval") {
+      const intervalRow = bottomRow.createDiv({ cls: "daily-note-flow-interval-row" });
+      intervalRow.createSpan({ text: "Every" });
+      const intervalInput = intervalRow.createEl("input", { type: "number", value: String(tpl.intervalDays || 1) });
+      intervalInput.style.width = "60px";
+      intervalInput.min = "1";
+      intervalInput.onchange = async () => {
+        tpl.intervalDays = Math.max(1, parseInt(intervalInput.value, 10) || 1);
+        await this.plugin.saveSettings();
+      };
+      intervalRow.createSpan({ text: "days, starting" });
+      const startInput = intervalRow.createEl("input", { type: "date", value: tpl.startDate || formatDate(new Date()) });
+      startInput.onchange = async () => {
+        tpl.startDate = startInput.value;
+        await this.plugin.saveSettings();
+      };
+    }
+  }
+
+  private renderApiTab(container: HTMLElement) {
+    new Setting(container)
       .setName("Root folder")
       .setDesc("Folder inside your Obsidian vault.")
       .addText((text) =>
@@ -1263,20 +1475,22 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("DeepSeek API key")
+    new Setting(container)
+      .setName("API key")
+      .setDesc("API key for your AI provider.")
       .addText((text) =>
         text
           .setPlaceholder("sk-...")
-          .setValue(this.plugin.settings.deepseekApiKey)
+          .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
-            this.plugin.settings.deepseekApiKey = value.trim();
+            this.plugin.settings.apiKey = value.trim();
             await this.plugin.saveSettings();
           })
       );
 
-    new Setting(containerEl)
-      .setName("AI base URL")
+    new Setting(container)
+      .setName("API base URL")
+      .setDesc("Base URL for the AI API endpoint.")
       .addText((text) =>
         text
           .setValue(this.plugin.settings.aiBaseUrl)
@@ -1286,8 +1500,9 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(container)
       .setName("AI model")
+      .setDesc("Model name to use for AI summaries.")
       .addText((text) =>
         text
           .setValue(normalizeAiModel(this.plugin.settings.aiModel))

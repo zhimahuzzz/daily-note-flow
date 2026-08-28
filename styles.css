@@ -226,6 +226,94 @@
   margin-top: 16px;
 }
 
+/* Settings tabs */
+.daily-note-flow-settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.daily-note-flow-settings-tab {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.daily-note-flow-settings-tab.is-active {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+
+.daily-note-flow-settings-tab:hover {
+  color: var(--text-normal);
+}
+
+/* Task template rows */
+.daily-note-flow-task-template-row {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.daily-note-flow-task-template-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.daily-note-flow-task-template-bottom {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.daily-note-flow-task-template-delete {
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-error);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.daily-note-flow-weekday-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.daily-note-flow-weekday-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.daily-note-flow-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+/* Summary textarea auto-height */
+.daily-note-flow-textarea {
+  overflow: hidden;
+  resize: none;
+  field-sizing: content;
+  min-height: 5em;
+}
+
 .daily-note-flow-record-textarea {
   min-height: 2.4em;
   overflow: hidden;

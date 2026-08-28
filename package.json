@@ -1,6 +1,6 @@
 {
   "name": "daily-note-flow",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "DailyNote as an Obsidian community plugin with pure Markdown storage.",
   "main": "main.js",
   "scripts": {
