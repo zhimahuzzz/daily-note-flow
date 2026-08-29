@@ -280,11 +280,11 @@ function safeJsonParse(text: string): unknown {
 }
 
 function parseRecordLine(line: string): DailyRecord | null {
-  const match = /^-\s+(?<time>\d{2}:\d{2})\s*(?<content>.*)$/.exec(line);
-  if (!match?.groups) return null;
+  const match = /^-\s+(\d{2}:\d{2})\s*(.*)$/.exec(line);
+  if (!match) return null;
   return {
-    time: match.groups.time,
-    content: match.groups.content.trim()
+    time: match[1],
+    content: match[2].trim()
   };
 }
 
@@ -1316,6 +1316,10 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   }
 
   display(): void {
+    this.renderSettings();
+  }
+
+  private renderSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
 
@@ -1330,11 +1334,11 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
 
     tasksTab.onclick = () => {
       this.activeTab = "tasks";
-      this.display();
+      this.renderSettings();
     };
     apiTab.onclick = () => {
       this.activeTab = "api";
-      this.display();
+      this.renderSettings();
     };
     updateTabStyles();
 
@@ -1348,7 +1352,9 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
   }
 
   private renderTasksTab(container: HTMLElement) {
-    container.createEl("h3", { text: "Daily Task Templates" });
+    new Setting(container)
+      .setName("Daily Task Templates")
+      .setHeading();
     container.createEl("p", { text: "Tasks defined here will be automatically added to new daily notes based on their schedule.", cls: "setting-item-description" });
 
     const templates = this.plugin.settings.taskTemplates;
@@ -1356,8 +1362,7 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
       this.renderTaskTemplateRow(container, i);
     }
 
-    const addBtn = container.createEl("button", { text: "+ Add Task Template", cls: "mod-cta" });
-    addBtn.style.marginTop = "12px";
+    const addBtn = container.createEl("button", { text: "+ Add Task Template", cls: "mod-cta daily-note-flow-task-template-add" });
     addBtn.onclick = async () => {
       const newTemplate: TaskTemplate = {
         id: `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1370,7 +1375,7 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
       };
       this.plugin.settings.taskTemplates.push(newTemplate);
       await this.plugin.saveSettings();
-      this.display();
+      this.renderSettings();
     };
   }
 
@@ -1382,27 +1387,31 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
 
     const toggle = topRow.createEl("input", { type: "checkbox" });
     toggle.checked = tpl.enabled;
-    toggle.onchange = async () => {
-      tpl.enabled = toggle.checked;
-      await this.plugin.saveSettings();
+    toggle.onchange = () => {
+      void (async () => {
+        tpl.enabled = toggle.checked;
+        await this.plugin.saveSettings();
+      })();
     };
 
     const titleInput = topRow.createEl("input", {
       type: "text",
+      cls: "daily-note-flow-task-template-title",
       value: tpl.title,
       placeholder: "Task title..."
     });
-    titleInput.style.flex = "1";
-    titleInput.addEventListener("change", async () => {
-      tpl.title = titleInput.value.trim();
-      await this.plugin.saveSettings();
+    titleInput.addEventListener("change", () => {
+      void (async () => {
+        tpl.title = titleInput.value.trim();
+        await this.plugin.saveSettings();
+      })();
     });
 
     const delBtn = topRow.createEl("button", { text: "×", cls: "daily-note-flow-task-template-delete" });
     delBtn.onclick = async () => {
       this.plugin.settings.taskTemplates.splice(index, 1);
       await this.plugin.saveSettings();
-      this.display();
+      this.renderSettings();
     };
 
     const bottomRow = row.createDiv({ cls: "daily-note-flow-task-template-bottom" });
@@ -1417,10 +1426,12 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
       const o = scheduleSelect.createEl("option", { value: opt.value, text: opt.label });
       if (opt.value === tpl.scheduleType) o.selected = true;
     }
-    scheduleSelect.onchange = async () => {
-      tpl.scheduleType = scheduleSelect.value as ScheduleType;
-      await this.plugin.saveSettings();
-      this.display();
+    scheduleSelect.onchange = () => {
+      void (async () => {
+        tpl.scheduleType = scheduleSelect.value as ScheduleType;
+        await this.plugin.saveSettings();
+        this.renderSettings();
+      })();
     };
 
     if (tpl.scheduleType === "weekly") {
@@ -1430,13 +1441,15 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
         const label = weekdayRow.createEl("label", { cls: "daily-note-flow-weekday-label" });
         const cb = label.createEl("input", { type: "checkbox" });
         cb.checked = tpl.weekdays.includes(d);
-        cb.onchange = async () => {
-          if (cb.checked) {
-            if (!tpl.weekdays.includes(d)) tpl.weekdays.push(d);
-          } else {
-            tpl.weekdays = tpl.weekdays.filter((w) => w !== d);
-          }
-          await this.plugin.saveSettings();
+        cb.onchange = () => {
+          void (async () => {
+            if (cb.checked) {
+              if (!tpl.weekdays.includes(d)) tpl.weekdays.push(d);
+            } else {
+              tpl.weekdays = tpl.weekdays.filter((w) => w !== d);
+            }
+            await this.plugin.saveSettings();
+          })();
         };
         label.createSpan({ text: dayLabels[d] });
       }
@@ -1445,18 +1458,21 @@ class DailyNoteFlowSettingTab extends PluginSettingTab {
     if (tpl.scheduleType === "interval") {
       const intervalRow = bottomRow.createDiv({ cls: "daily-note-flow-interval-row" });
       intervalRow.createSpan({ text: "Every" });
-      const intervalInput = intervalRow.createEl("input", { type: "number", value: String(tpl.intervalDays || 1) });
-      intervalInput.style.width = "60px";
+      const intervalInput = intervalRow.createEl("input", { type: "number", cls: "daily-note-flow-interval-input", value: String(tpl.intervalDays || 1) });
       intervalInput.min = "1";
-      intervalInput.onchange = async () => {
-        tpl.intervalDays = Math.max(1, parseInt(intervalInput.value, 10) || 1);
-        await this.plugin.saveSettings();
+      intervalInput.onchange = () => {
+        void (async () => {
+          tpl.intervalDays = Math.max(1, parseInt(intervalInput.value, 10) || 1);
+          await this.plugin.saveSettings();
+        })();
       };
       intervalRow.createSpan({ text: "days, starting" });
       const startInput = intervalRow.createEl("input", { type: "date", value: tpl.startDate || formatDate(new Date()) });
-      startInput.onchange = async () => {
-        tpl.startDate = startInput.value;
-        await this.plugin.saveSettings();
+      startInput.onchange = () => {
+        void (async () => {
+          tpl.startDate = startInput.value;
+          await this.plugin.saveSettings();
+        })();
       };
     }
   }

@@ -306,6 +306,19 @@
   font-size: 13px;
 }
 
+.daily-note-flow-task-template-add {
+  margin-top: 12px;
+}
+
+.daily-note-flow-task-template-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.daily-note-flow-interval-input {
+  width: 60px;
+}
+
 /* Summary textarea auto-height */
 .daily-note-flow-textarea {
   overflow: hidden;
