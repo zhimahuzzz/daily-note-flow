@@ -1,7 +1,7 @@
 {
   "id": "daily-note-flow",
   "name": "Daily Note Flow",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "minAppVersion": "1.5.0",
   "description": "Capture daily tasks, todos, time-classified records, and summaries into pure Markdown notes.",
   "author": "zhimahuzzz",

@@ -319,6 +319,24 @@
   width: 60px;
 }
 
+/* Section header with clock */
+.daily-note-flow-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.daily-note-flow-section-header h3 {
+  margin: 0;
+}
+
+.daily-note-flow-clock {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
 /* Summary textarea auto-height */
 .daily-note-flow-textarea {
   overflow: hidden;

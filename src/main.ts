@@ -539,6 +539,140 @@ function renderMonthlySummary(date: Date, entries: DailyNoteEntry[]) {
   return lines.join("\n").trim();
 }
 
+function extractTaskText(line: string): string {
+  return line.replace(/^-\s*\[[ xX]\]\s*/, "").trim();
+}
+
+function isTaskCompleted(line: string): boolean {
+  return /^-\s*\[[xX]\]/.test(line);
+}
+
+function generateStructuredSummary(date: Date, entries: DailyNoteEntry[], kind: "weekly" | "monthly"): string {
+  const lines: string[] = [];
+  const rangeLabel = kind === "weekly" ? `Week ${getIsoWeekKey(date)}` : `${getMonthKey(date)}`;
+  lines.push(`## Overview`);
+  lines.push(`- Period: ${rangeLabel}`);
+  lines.push(`- Days with notes: ${entries.length}`);
+  lines.push("");
+
+  const allTasks: string[] = [];
+  const completedTasks: string[] = [];
+  const pendingTasks: string[] = [];
+  const allRecords: DailyRecord[] = [];
+  const summaryTexts: string[] = [];
+
+  for (const entry of entries) {
+    for (const t of [...entry.note.tasks, ...entry.note.todos]) {
+      const text = extractTaskText(t);
+      if (!text) continue;
+      allTasks.push(text);
+      if (isTaskCompleted(t)) completedTasks.push(text);
+      else pendingTasks.push(text);
+    }
+    for (const period of ["morning", "afternoon", "evening"] as TimePeriod[]) {
+      allRecords.push(...entry.note.records[period]);
+    }
+    if (entry.note.summary.trim()) summaryTexts.push(entry.note.summary.trim());
+  }
+
+  lines.push(`## Task Overview`);
+  lines.push(`- Total tasks: ${allTasks.length}`);
+  lines.push(`- Completed: ${completedTasks.length}`);
+  lines.push(`- Pending: ${pendingTasks.length}`);
+  if (allTasks.length > 0) {
+    const completionRate = Math.round((completedTasks.length / allTasks.length) * 100);
+    lines.push(`- Completion rate: ${completionRate}%`);
+  }
+  lines.push("");
+
+  if (completedTasks.length > 0) {
+    lines.push(`## Completed`);
+    const completedCount = new Map<string, number>();
+    for (const t of completedTasks) completedCount.set(t, (completedCount.get(t) || 0) + 1);
+    const sorted = [...completedCount.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [text, count] of sorted.slice(0, 15)) {
+      lines.push(`- [x] ${text}${count > 1 ? ` (×${count})` : ""}`);
+    }
+    lines.push("");
+  }
+
+  if (pendingTasks.length > 0) {
+    lines.push(`## Pending / Follow-up`);
+    const pendingCount = new Map<string, number>();
+    for (const t of pendingTasks) pendingCount.set(t, (pendingCount.get(t) || 0) + 1);
+    const sorted = [...pendingCount.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [text, count] of sorted.slice(0, 15)) {
+      lines.push(`- [ ] ${text}${count > 1 ? ` (×${count})` : ""}`);
+    }
+    lines.push("");
+  }
+
+  if (allRecords.length > 0) {
+    lines.push(`## Records Highlights`);
+    lines.push(`- Total records: ${allRecords.length}`);
+    const recordTexts = allRecords.map((r) => r.content.split("\n")[0].trim()).filter((t) => t.length > 0);
+    const recordCount = new Map<string, number>();
+    for (const t of recordTexts) recordCount.set(t, (recordCount.get(t) || 0) + 1);
+    const sorted = [...recordCount.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [text, count] of sorted.slice(0, 10)) {
+      lines.push(`- ${text}${count > 1 ? ` (×${count})` : ""}`);
+    }
+    lines.push("");
+  }
+
+  if (summaryTexts.length > 0) {
+    lines.push(`## Daily Summaries`);
+    for (let i = 0; i < summaryTexts.length; i++) {
+      const entry = entries[i];
+      if (entry) lines.push(`### ${formatDate(entry.date)}`);
+      lines.push(summaryTexts[i]);
+      lines.push("");
+    }
+  }
+
+  return lines.join("\n").trim();
+}
+
+function buildSummaryPrompt(date: Date, entries: DailyNoteEntry[], kind: "weekly" | "monthly"): string {
+  const rangeLabel = kind === "weekly" ? `Week ${getIsoWeekKey(date)}` : `${getMonthKey(date)}`;
+  const parts: string[] = [];
+  parts.push(`You are writing a ${kind === "weekly" ? "weekly" : "monthly"} review summary for ${rangeLabel}.`);
+  parts.push(`Analyze the daily notes below and produce a concise, insightful Chinese Markdown summary.`);
+  parts.push(`Do NOT just list each day's content. Instead, synthesize and highlight:`);
+  parts.push(`1. Key accomplishments and completed items`);
+  parts.push(`2. Recurring themes or patterns`);
+  parts.push(`3. Progress and trends observed`);
+  parts.push(`4. Unfinished items or blockers that need follow-up`);
+  parts.push(`5. Notable records or events`);
+  parts.push(``);
+  parts.push(`Here are the daily notes:`);
+  parts.push(``);
+
+  for (const entry of entries) {
+    parts.push(`### ${formatDate(entry.date)}`);
+    if (entry.note.tasks.length) {
+      parts.push(`**Daily Tasks:**`);
+      parts.push(...entry.note.tasks);
+    }
+    if (entry.note.todos.length) {
+      parts.push(`**Todos:**`);
+      parts.push(...entry.note.todos);
+    }
+    const allRecords = [...entry.note.records.morning, ...entry.note.records.afternoon, ...entry.note.records.evening];
+    if (allRecords.length) {
+      parts.push(`**Records:**`);
+      for (const r of allRecords) parts.push(`- ${r.time} ${r.content}`);
+    }
+    if (entry.note.summary.trim()) {
+      parts.push(`**Summary:** ${entry.note.summary.trim()}`);
+    }
+    parts.push(``);
+  }
+
+  parts.push(`Please write the summary now in Chinese Markdown. Start directly with the summary content, no preamble.`);
+  return parts.join("\n");
+}
+
 function previewSummaryContent(title: string, body: string) {
   return `# ${title}\n\n${body.trim()}\n`;
 }
@@ -751,12 +885,59 @@ export default class DailyNoteFlowPlugin extends Plugin {
     }
   }
 
+  async generateSummaryBody(date: Date, entries: DailyNoteEntry[], kind: "weekly" | "monthly"): Promise<string> {
+    if (entries.length === 0) {
+      return `## Overview\n- No daily notes found for this ${kind === "weekly" ? "week" : "month"}.`;
+    }
+    if (!this.settings.apiKey) {
+      return generateStructuredSummary(date, entries, kind);
+    }
+    try {
+      const prompt = buildSummaryPrompt(date, entries, kind);
+      const response = await requestUrl({
+        url: `${this.settings.aiBaseUrl.replace(/\/$/, "")}/chat/completions`,
+        method: "POST",
+        throw: false,
+        contentType: "application/json",
+        headers: {
+          Authorization: `Bearer ${this.settings.apiKey}`
+        },
+        body: JSON.stringify({
+          model: normalizeAiModel(this.settings.aiModel),
+          messages: [
+            {
+              role: "system",
+              content: "You write concise, insightful Chinese Markdown review summaries from daily notes."
+            },
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          temperature: 0.4
+        })
+      });
+      if (response.status >= 400) {
+        throw new Error(`HTTP ${response.status}: ${response.text}`);
+      }
+      const content = extractAiContent(response.text);
+      if (!content) {
+        throw new Error("AI returned an empty summary.");
+      }
+      return content.trim();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`AI ${kind} summary failed, using structured summary: ${message}`);
+      return generateStructuredSummary(date, entries, kind);
+    }
+  }
+
   async generateWeeklySummary(date = new Date()) {
     const weekKey = getIsoWeekKey(date);
     const title = `${weekKey} Weekly Summary`;
     const range = getWeekRange(date);
     const entries = await listDailyEntries(this.app, this.settings.rootFolder, range.start, range.end);
-    const body = renderWeeklySummary(date, entries);
+    const body = await this.generateSummaryBody(date, entries, "weekly");
     return await this.writeSummaryFile("weekly", title, weekKey, body);
   }
 
@@ -765,7 +946,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
     const title = `${monthKey} Monthly Summary`;
     const range = getMonthRange(date);
     const entries = await listDailyEntries(this.app, this.settings.rootFolder, range.start, range.end);
-    const body = renderMonthlySummary(date, entries);
+    const body = await this.generateSummaryBody(date, entries, "monthly");
     return await this.writeSummaryFile("monthly", title, monthKey, body);
   }
 
@@ -774,7 +955,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
     const title = `${weekKey} Weekly Summary`;
     const range = getWeekRange(date);
     const entries = await listDailyEntries(this.app, this.settings.rootFolder, range.start, range.end);
-    const body = renderWeeklySummary(date, entries);
+    const body = await this.generateSummaryBody(date, entries, "weekly");
     const folder = await this.ensureSummaryFolder("weekly");
     const file = await this.ensureSummaryFile("weekly", folder, weekKey, previewSummaryContent(title, body));
     await this.openPreview(title, file, body);
@@ -785,7 +966,7 @@ export default class DailyNoteFlowPlugin extends Plugin {
     const title = `${monthKey} Monthly Summary`;
     const range = getMonthRange(date);
     const entries = await listDailyEntries(this.app, this.settings.rootFolder, range.start, range.end);
-    const body = renderMonthlySummary(date, entries);
+    const body = await this.generateSummaryBody(date, entries, "monthly");
     const folder = await this.ensureSummaryFolder("monthly");
     const file = await this.ensureSummaryFile("monthly", folder, monthKey, previewSummaryContent(title, body));
     await this.openPreview(title, file, body);
@@ -893,6 +1074,10 @@ class DailyNoteFlowView extends ItemView {
   private currentDate: Date = new Date();
   private selectedDate: Date | null = null;
   private calendarMonth: Date | null = null;
+  private clockTimer: number | null = null;
+  private clockEl: HTMLElement | null = null;
+  private addTimeInputEl: HTMLInputElement | null = null;
+  private userEditedTime: boolean = false;
 
   constructor(leaf: WorkspaceLeaf, private plugin: DailyNoteFlowPlugin) {
     super(leaf);
@@ -912,6 +1097,7 @@ class DailyNoteFlowView extends ItemView {
 
   async onClose() {
     await this.flushAutoSave();
+    this.stopClock();
   }
 
   private setSaveStatus(status: "saved" | "saving" | "unsaved" | "failed") {
@@ -1087,10 +1273,16 @@ class DailyNoteFlowView extends ItemView {
     );
 
     const recordsSection = container.createDiv({ cls: "daily-note-flow-section" });
-    recordsSection.createEl("h3", { text: "Records" });
+    const recordsHeader = recordsSection.createDiv({ cls: "daily-note-flow-section-header" });
+    recordsHeader.createEl("h3", { text: "Records" });
+    this.clockEl = recordsHeader.createEl("span", { cls: "daily-note-flow-clock", text: `Now: ${formatTime(new Date())}` });
     const addRow = recordsSection.createDiv({ cls: "daily-note-flow-record-row" });
-    const addTimeInput = addRow.createEl("input", { type: "time" });
-    addTimeInput.value = formatTime(new Date());
+    this.addTimeInputEl = addRow.createEl("input", { type: "time" });
+    this.addTimeInputEl.value = formatTime(new Date());
+    this.userEditedTime = false;
+    this.addTimeInputEl.addEventListener("change", () => {
+      this.userEditedTime = true;
+    });
     const addContentInput = addRow.createEl("textarea", {
       cls: "daily-note-flow-grow daily-note-flow-record-textarea",
       placeholder: "Record content (Enter to add, Shift+Enter for newline)"
@@ -1100,7 +1292,8 @@ class DailyNoteFlowView extends ItemView {
     const addRecord = async () => {
       if (!addContentInput.value.trim()) return;
       await this.flushAutoSave();
-      await this.plugin.appendRecord(addContentInput.value.trim(), addTimeInput.value, this.selectedDate ?? new Date());
+      await this.plugin.appendRecord(addContentInput.value.trim(), this.addTimeInputEl?.value || formatTime(new Date()), this.selectedDate ?? new Date());
+      this.userEditedTime = false;
       await this.renderView();
     };
     addButton.onclick = addRecord;
@@ -1259,6 +1452,33 @@ class DailyNoteFlowView extends ItemView {
       );
       menu.showAtMouseEvent(e);
     });
+    this.startClock();
+  }
+
+  private startClock() {
+    this.stopClock();
+    this.updateClock();
+    this.clockTimer = window.setInterval(() => {
+      this.updateClock();
+    }, 1000);
+  }
+
+  private stopClock() {
+    if (this.clockTimer !== null) {
+      window.clearInterval(this.clockTimer);
+      this.clockTimer = null;
+    }
+  }
+
+  private updateClock() {
+    const now = new Date();
+    const timeStr = formatTime(now);
+    if (this.clockEl) {
+      this.clockEl.setText(`Now: ${timeStr}`);
+    }
+    if (this.addTimeInputEl && !this.userEditedTime) {
+      this.addTimeInputEl.value = timeStr;
+    }
   }
 }
 
